@@ -7,16 +7,20 @@ use Craft;
 use craft\base\Plugin as BasePlugin;
 use craft\db\Query;
 use craft\db\Table;
+use craft\events\DeleteSiteEvent;
 use craft\events\RebuildConfigEvent;
 use craft\events\RegisterComponentTypesEvent;
+use craft\fields\Matrix;
 use craft\services\Fields;
 use craft\services\ProjectConfig;
+use craft\services\Sites;
 use craft\web\twig\variables\CraftVariable;
 use craft\events\RegisterGqlTypesEvent;
 use craft\services\Gql;
 
 use benf\neo\controllers\Conversion as ConversionController;
 use benf\neo\controllers\Input as InputController;
+use benf\neo\elements\Block;
 use benf\neo\models\Settings;
 use benf\neo\services\Blocks as BlocksService;
 use benf\neo\services\BlockTypes as BlockTypesService;
@@ -78,6 +82,7 @@ class Plugin extends BasePlugin
         $this->_registerGqlType();
         $this->_registerProjectConfigApply();
         $this->_registerProjectConfigRebuild();
+        $this->_registerSiteDeletionBlockCleanup();
         $this->_setupBlocksHasSortOrder();
     }
 
@@ -248,6 +253,69 @@ class Plugin extends BasePlugin
 
             $event->config['neoBlockTypes'] = $blockTypeData;
             $event->config['neoBlockTypeGroups'] = $blockTypeGroupData;
+        });
+    }
+
+    private function _registerSiteDeletionBlockCleanup()
+    {
+        Event::on(Sites::class, Sites::EVENT_BEFORE_DELETE_SITE, function(DeleteSiteEvent $event) {
+            $elementsService = Craft::$app->getElements();
+            $sitesService = Craft::$app->getSites();
+            $site = $event->site;
+            $neoFields = array_filter(Craft::$app->getFields()->getAllFields(null), function($field) {
+                return $field instanceof Field;
+            });
+            $fieldsToDeleteBlocks = [];
+
+
+            foreach ($neoFields as $neoField) {
+                switch ($neoField->propagationMethod) {
+                    case Matrix::PROPAGATION_METHOD_NONE:
+                        // We know we're deleting blocks
+                        break;
+
+                    case Matrix::PROPAGATION_METHOD_SITE_GROUP:
+                        if (count($sitesService->getSitesByGroupId($site->groupId)) > 1) {
+                            // Some other site exists in this group, so don't delete the blocks
+                            continue 2;
+                        }
+
+                        break;
+
+                    case Matrix::PROPAGATION_METHOD_LANGUAGE:
+                        $sites = array_filter($sitesService->getAllSites(), function($s) use($site) {
+                            return $s->language === $site->language;
+                        });
+
+                        if (count($sites) > 1) {
+                            // Some other site exists with this language, so don't delete the blocks
+                            continue 2;
+                        }
+
+                        break;
+
+                    default:
+                        // Matrix::PROPAGATION_METHOD_ALL: nothing to see here, move along
+                        continue 2;
+                }
+
+                // If we're still here, we need to delete the blocks
+                $fieldsToDeleteBlocks[] = $neoField->id;
+            }
+
+            unset($neoField);
+
+            if (!empty($fieldsToDeleteBlocks)) {
+                $blocks = Block::find()
+                    ->fieldId($fieldsToDeleteBlocks)
+                    ->siteId($site->id)
+                    ->anyStatus()
+                    ->all();
+
+                foreach ($blocks as $block) {
+                    $elementsService->deleteElement($block, true);
+                }
+            }
         });
     }
 
