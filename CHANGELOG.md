@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Fixed an error that occurred when executing a Neo block query in which the `fieldId` and `ownerId` properties were both arrays
+
 ## 2.8.7 - 2020-08-26
 
 ### Changed

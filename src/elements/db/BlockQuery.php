@@ -333,8 +333,6 @@ class BlockQuery extends ElementQuery
      */
     protected function beforePrepare(): bool
     {
-        // $dbService = Craft::$app->getDb();
-        
         $this->joinElementTable('neoblocks');
         
         $isSaved = $this->id && is_numeric($this->id);
@@ -351,13 +349,11 @@ class BlockQuery extends ElementQuery
             }
         }
         
-        // add the structureId so it doesn't retrieve all blocks for every site.
-        if (!$this->structureId && $this->fieldId && $this->ownerId)
-        {
+        // Add the structure ID if we wanted a specific field/owner, so it doesn't retrieve all blocks for every site
+        if (!$this->structureId && is_numeric($this->fieldId) && is_numeric($this->ownerId)) {
             $blockStructure = Neo::$plugin->blocks->getStructure($this->fieldId, $this->ownerId, (int)$this->siteId);
-        
-            if ($blockStructure)
-            {
+
+            if ($blockStructure) {
                 $this->structureId = $blockStructure->structureId;
             }
         }
