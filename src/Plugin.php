@@ -7,12 +7,15 @@ use Craft;
 use craft\base\Plugin as BasePlugin;
 use craft\db\Query;
 use craft\db\Table;
+use craft\elements\Entry;
 use craft\events\DeleteSiteEvent;
 use craft\events\RebuildConfigEvent;
 use craft\events\RegisterComponentTypesEvent;
+use craft\events\SectionEvent;
 use craft\fields\Matrix;
 use craft\services\Fields;
 use craft\services\ProjectConfig;
+use craft\services\Sections;
 use craft\services\Sites;
 use craft\web\twig\variables\CraftVariable;
 use craft\events\RegisterGqlTypesEvent;
@@ -259,64 +262,103 @@ class Plugin extends BasePlugin
     private function _registerSiteDeletionBlockCleanup()
     {
         Event::on(Sites::class, Sites::EVENT_BEFORE_DELETE_SITE, function(DeleteSiteEvent $event) {
-            $elementsService = Craft::$app->getElements();
-            $sitesService = Craft::$app->getSites();
-            $site = $event->site;
-            $neoFields = array_filter(Craft::$app->getFields()->getAllFields(null), function($field) {
-                return $field instanceof Field;
-            });
-            $fieldsToDeleteBlocks = [];
+            $this->_siteBlockCleanup([$event->site], null);
+        });
 
-
-            foreach ($neoFields as $neoField) {
-                switch ($neoField->propagationMethod) {
-                    case Matrix::PROPAGATION_METHOD_NONE:
-                        // We know we're deleting blocks
-                        break;
-
-                    case Matrix::PROPAGATION_METHOD_SITE_GROUP:
-                        if (count($sitesService->getSitesByGroupId($site->groupId)) > 1) {
-                            // Some other site exists in this group, so don't delete the blocks
-                            continue 2;
-                        }
-
-                        break;
-
-                    case Matrix::PROPAGATION_METHOD_LANGUAGE:
-                        $sites = array_filter($sitesService->getAllSites(), function($s) use($site) {
-                            return $s->language === $site->language;
-                        });
-
-                        if (count($sites) > 1) {
-                            // Some other site exists with this language, so don't delete the blocks
-                            continue 2;
-                        }
-
-                        break;
-
-                    default:
-                        // Matrix::PROPAGATION_METHOD_ALL: nothing to see here, move along
-                        continue 2;
-                }
-
-                // If we're still here, we need to delete the blocks
-                $fieldsToDeleteBlocks[] = $neoField->id;
+        Event::on(Sections::class, Sections::EVENT_BEFORE_SAVE_SECTION, function(SectionEvent $event) {
+            // Clearly there are no blocks to delete if the section didn't already exist
+            if ($event->isNew) {
+                return;
             }
 
-            unset($neoField);
+            $enabledSiteIds = array_map(function($settings) {
+                return $settings->siteId;
+            }, $event->section->getSiteSettings());
+            $disabledSites = array_filter(Craft::$app->getSites()->getAllSites(), function($site) use($enabledSiteIds) {
+                return !isset($enabledSiteIds[$site->id]);
+            });
 
-            if (!empty($fieldsToDeleteBlocks)) {
-                $blocks = Block::find()
-                    ->fieldId($fieldsToDeleteBlocks)
-                    ->siteId($site->id)
-                    ->anyStatus()
-                    ->all();
-
-                foreach ($blocks as $block) {
-                    $elementsService->deleteElement($block, true);
-                }
+            if (!empty($disabledSites)) {
+                $this->_siteBlockCleanup($disabledSites, $event->section);
             }
         });
+    }
+
+    private function _siteBlockCleanup(array $sites, $section) {
+        $elementsService = Craft::$app->getElements();
+        $allSites = Craft::$app->getSites()->getAllSites();
+        $neoFields = array_filter(Craft::$app->getFields()->getAllFields(null), function($field) {
+            return $field instanceof Field;
+        });
+        $fieldsToDeleteBlocks = [];
+
+        $sitesBy = function($sitesToGroup, $groupingProperty) {
+            return array_reduce($sitesToGroup, function($acc, $s) use($groupingProperty) {
+                $acc[$s->$groupingProperty][] = $s;
+                return $acc;
+            }, []);
+        };
+        $allSitesByGroupId = $sitesBy($allSites, 'groupId');
+        $allSitesByLanguage = $sitesBy($allSites, 'language');
+        $deletedSitesByGroupId = $sitesBy($sites, 'groupId');
+        $deletedSitesByLanguage = $sitesBy($sites, 'language');
+
+        // For each group (or language), if count(all sites of group) === count(deleted sites of group), then we want
+        // to delete the blocks belonging to the current field for the sites in that group
+
+        foreach ($neoFields as $neoField) {
+            switch ($neoField->propagationMethod) {
+                case Matrix::PROPAGATION_METHOD_NONE:
+                    foreach ($sites as $site) {
+                        $fieldsToDeleteBlocks[$site->id][] = $neoField->id;
+                    }
+
+                    break;
+
+                case Matrix::PROPAGATION_METHOD_SITE_GROUP:
+                    foreach ($deletedSitesByGroupId as $groupId => $groupSites) {
+                        if (count($allSitesByGroupId[$groupId]) === count($deletedSitesByGroupId[$groupId])) {
+                            foreach ($groupSites as $groupSite) {
+                                $fieldsToDeleteBlocks[$groupSite->id][] = $neoField->id;
+                            }
+                        }
+                    }
+
+                    break;
+
+                case Matrix::PROPAGATION_METHOD_LANGUAGE:
+                    foreach ($deletedSitesByLanguage as $language => $languageSites) {
+                        if (count($allSitesByLanguage[$language]) === count($deletedSitesByLanguage[$language])) {
+                            foreach ($languageSites as $languageSite) {
+                                $fieldsToDeleteBlocks[$languageSite->id][] = $neoField->id;
+                            }
+                        }
+                    }
+
+                    break;
+
+                default:
+                    // Matrix::PROPAGATION_METHOD_ALL: nothing to see here, move along
+                    break;
+            }
+        }
+
+        unset($neoField);
+
+        foreach ($fieldsToDeleteBlocks as $siteId => $fieldIds) {
+            $query = Block::find()
+                ->fieldId($fieldIds)
+                ->siteId($siteId)
+                ->anyStatus();
+
+            if ($section !== null) {
+                $query->ownerId(Entry::find()->section($section)->ids());
+            }
+
+            foreach ($query->all() as $block) {
+                $elementsService->deleteElement($block, true);
+            }
+        }
     }
 
     private function _setupBlocksHasSortOrder()
