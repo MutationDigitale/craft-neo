@@ -317,7 +317,7 @@ class Plugin extends BasePlugin
 
                 case Matrix::PROPAGATION_METHOD_SITE_GROUP:
                     foreach ($deletedSitesByGroupId as $groupId => $groupSites) {
-                        if (count($allSitesByGroupId[$groupId]) === count($deletedSitesByGroupId[$groupId])) {
+                        if (count($allSitesByGroupId[$groupId]) === count($groupSites)) {
                             foreach ($groupSites as $groupSite) {
                                 $fieldsToDeleteBlocks[$groupSite->id][] = $neoField->id;
                             }
@@ -328,7 +328,7 @@ class Plugin extends BasePlugin
 
                 case Matrix::PROPAGATION_METHOD_LANGUAGE:
                     foreach ($deletedSitesByLanguage as $language => $languageSites) {
-                        if (count($allSitesByLanguage[$language]) === count($deletedSitesByLanguage[$language])) {
+                        if (count($allSitesByLanguage[$language]) === count($languageSites)) {
                             foreach ($languageSites as $languageSite) {
                                 $fieldsToDeleteBlocks[$languageSite->id][] = $neoField->id;
                             }
