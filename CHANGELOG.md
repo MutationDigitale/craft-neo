@@ -5,6 +5,15 @@
 ### Fixed
 - Fixed an error that occurred when executing a Neo block query in which the `fieldId` and `ownerId` properties were both arrays
 
+## 2.8.8 - 2020-09-05
+
+### Changed
+- Neo now requires Craft 3.5.8 or later
+
+### Fixed
+- Fixed a compatibility issue introduced with Craft 3.5.8, where required Neo sub-fields would not appear as required in the field layout designer
+- Fixed an issue where saving an otherwise-unmodified Neo block with a newly-added Super Table field, that has either a minimum number or rows or a static row, would cause an "Attempting to duplicate an unsaved element" error
+
 ## 2.8.7 - 2020-08-26
 
 ### Changed
